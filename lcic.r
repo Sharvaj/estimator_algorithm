@@ -8,7 +8,7 @@ library(LogConcDEAD)
 library(logcondens) 
 library(mclust)
 
-###
+### Basic utilities
 
 fix_signs_fun <- function(my_mat) {
     # Make the signs of the fist column positive
@@ -29,10 +29,11 @@ generate_weighted_samples <- function(data_mat, theta_weights, num_resample) {
     return(data_mat[sampled_row_indices,])
 }
 
-## Generates synthetic data to be worked with. This should be modified
-## according to the desired application and data. Creates
-## a matrix whose rows represent each data point.
+### Generate or package data
 
+## The functions below generate synthetic data to be worked with. These should be used
+## according to the desired application and data. These are based on matrices
+## whose rows represent each data point.
 
 get_heteroskedastic_gaussian_data <- function(d, n, true_mean_vec=rep(0,d), Sigma_max=d, eigensep=1) {
   # print(true_mean_vec)
@@ -118,6 +119,8 @@ package_real_data <- function(real_data_mat) {
 
     return(list("n"=n, "d"=d, "pre_data"=real_data_mat))
 }
+
+### Functions for contructing estimators
 
 ## Randomizes and splits the observations into two sets, with fraction r 
 ## (0 <= r <= 1) of them going into the first set.
@@ -214,7 +217,9 @@ generate_weighted_estimator_with_logcondens <- function(SimData, theta_weights, 
     W_hat <- t(princomp(covmat=cov_compute$cov, fix_sign=TRUE)$loadings)
     unmixed_obs <- centered_data_for_dens %*% t(W_hat)
     print("PCA done!")
-    
+    print("NA check:")
+    print(any(is.na(unmixed_obs)))
+
     marginals <- list()
     
     for (i in 1:SimData$d) {
@@ -275,6 +280,7 @@ evaluate_logconcdead_estimator_vectorized <- function(X_mat, my_estimator){
 }
 
 evaluate_mixture_density_vectorized <- function(cluster_densities, pi_vec, X_mat) {
+    # Meant for logcondens 
     n_eval <- NROW(X_mat)
     num_clusters <- length(pi_vec)
     evaluated_clusters <- matrix(0, nrow=n_eval, ncol=num_clusters)
@@ -299,6 +305,7 @@ gaussian_test_data_pdf <- function(x, d, covariance_Z, W) {
 
 
 visualize_theta_weights <- function(theta_weights, data_mat) {
+    print("Not implemented yet!")
     return(0)
 }
 
@@ -326,7 +333,7 @@ initialize_EM <- function(SimData, num_clusters) {
 }
 
 
-EM_with_lcic <- function(SimData, theta_mat_init, num_clusters, resample_factors=c(1,1), num_iter=10) {
+EM_with_lcic <- function(SimData, theta_mat_init, num_clusters, resample_factors=c(1,1), num_iter=10, theps=0) {
     # theta_mat_init has n rows and K columns theta_ik = f(k|Xi)
 
     cluster_densities = list()
@@ -342,8 +349,35 @@ EM_with_lcic <- function(SimData, theta_mat_init, num_clusters, resample_factors
         for (kind in 1:num_clusters){
             theta_weights <- theta_mat[,kind]
             theta_weights <- theta_weights/sum(theta_weights)
-            cluster_densities[[kind]] <- generate_weighted_estimator_with_logcondens(SimData, theta_weights, resample_factors=resample_factors)
+            try(cluster_densities[[kind]] <- generate_weighted_estimator_with_logcondens(SimData, theta_weights, resample_factors=resample_factors), silent=FALSE)
+            
+            # success_flag <- 1
+            # redo_counter <- 1
+            # while ((success_flag == 1) & (redo_counter < 10)) {
+
+            #     success_flag <- tryCatch(
+            #         {
+            #             cluster_densities[[kind]] <<- generate_weighted_estimator_with_logcondens(SimData, theta_weights, resample_factors=resample_factors)
+            #             # success return flag
+            #             0
+            #         },
+            #         error = function(e) {
+            #             print('Redo due to NA error')
+            #             return(1)
+            #         },
+            #         finally = {
+            #             print("Finally: Retry if needed")
+            #         }
+
+            #     )
+            #     flush.console()
+            #     Sys.sleep(0.2)
+            #     redo_counter <- redo_counter + 1
+            #     print(redo_counter)
+            # }
+            
         }
+
         pi_vec <- colSums(theta_mat)
         # print('Pi vec')
         # print(pi_vec)
@@ -356,8 +390,18 @@ EM_with_lcic <- function(SimData, theta_mat_init, num_clusters, resample_factors
         }
         # print("Theta mat")
         # print(theta_mat)
+        
+
         theta_mat <- theta_mat / rowSums(theta_mat) # are row sums zero?
         theta_mat[is.na(theta_mat)] <- 0
+        
+        theta_mat <- pmax(theta_mat, theps)
+        print("Theta min before = ")
+        print(min(theta_mat))
+
+        theta_mat <- theta_mat / rowSums(theta_mat)
+        print("Theta min after = ")
+        print(min(theta_mat))
         # print("Row sums:")
         # print(rowSums(theta_mat))
         # print("Theta mat")
@@ -368,8 +412,32 @@ EM_with_lcic <- function(SimData, theta_mat_init, num_clusters, resample_factors
         all_likelihoods[itind] <- (1/SimData$n) * sum(log(my_evaluations))
         print("Log-likelihood: ")
         print(all_likelihoods[itind])
+        
+        flush.console()
+        Sys.sleep(0.2)
     }
     return(list("cluster_densities"=cluster_densities, "pi_vec"=pi_vec, "theta_mat"=theta_mat, "all_likelihoods"=all_likelihoods))
+}
+
+EM_with_fulldim <- function(SimData, num_clusters, max_iter=10, verbose=-1) {
+
+    EM_results <- EMmixlcd(SimData$pre_data, k=num_clusters, max.iter=max_iter, verbose=verbose)
+    
+    n <- NROW(SimData$pre_data)
+
+    pi_vec = EM_results$props
+    evaluated_densities <- exp(EM_results$logf)
+    
+    theta_mat <- matrix(0, nrow=n, ncol=num_clusters)
+
+    for (kind in 1:num_clusters) {
+        theta_mat[,kind] <- pi_vec[kind] * evaluated_densities[,kind]
+    }
+
+    theta_mat <- theta_mat / rowSums(theta_mat)
+    theta_mat[is.na(theta_mat)] <- 0
+
+    return(list("cluster_densities"=NA, "pi_vec"=pi_vec, "theta_mat"=theta_mat, "all_likelihoods"=EM_results$lcdloglik))
 }
 
 
@@ -388,6 +456,8 @@ axis_aligned_heteroskedastic_gamma_pdf_vectorized <- function(X_mat, SimData) {
     }
     return(density_data)
 }
+
+### Functions for evaluating Monte Carlo integrals for Hellinger error computations
 
 naive_monte_carlo_integrate <- function(F_fun, random_samples_generate, K_samps){
     # F_fun shoud take rows of a matrix as input points
@@ -446,9 +516,14 @@ direction_inner_products <- function(SimData, my_estimator){
 }
 
 
+map_to_data_space <- function(scores_mat, pca_res) {
+    return(t((pca_res$loadings %*% t(scores_mat)) + pca_res$center))
+}
+
+
 
 ################
-# TESTS AND PLOTS
+# TESTS
 
 
 tests_for_split_ratio_r_gaussian <- function(d, n, all_split_r_vals, Sigma_max, eigensep, num_repeats_full, savefilename) {
