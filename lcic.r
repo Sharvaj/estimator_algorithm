@@ -120,6 +120,29 @@ package_real_data <- function(real_data_mat) {
     return(list("n"=n, "d"=d, "pre_data"=real_data_mat))
 }
 
+get_uniform_data <- function(d, n, scalings_vec, true_mean_vec) {
+
+    W <- fix_signs_fun(randortho(d, type="orthonormal"))
+    
+    init_data <- matrix(0, nrow=n, ncol=d)
+
+    # covariance_Z <- matrix(0, ncol = d, nrow = d)
+
+    for (dind in 1:d){
+        init_data[,dind] <- true_mean_vec[dind] + runif(n, min=-scalings_vec[dind], max=scalings_vec[dind])
+        # covariance_Z[dind, dind] <- d+2-dind
+    }
+    # covariance_X <- t(W) %*% covariance_Z %*% W
+    centered_init_data <- t(t(init_data) - true_mean_vec)
+    
+    pre_data <- centered_init_data %*% W
+    pre_data <- t(t(pre_data) + true_mean_vec)
+
+    my_output <- list("n"=n, "d"=d, "scalings_Z"=scalings_vec, "true_mean_vec"=true_mean_vec, "W"=W, "pre_data"=pre_data)
+    return(my_output)
+
+}
+
 ### Functions for contructing estimators
 
 ## Randomizes and splits the observations into two sets, with fraction r 
@@ -166,6 +189,31 @@ generate_estimator_with_logcondens <- function(SimData, r=0.9, plotting=FALSE) {
     }
     return(list("W_hat"=W_hat, "marginals"=marginals, "mean_vec"=SplitData$mean_vec))
 }
+
+fit_marginals_given_W <- function(SimData, W_given, plotting=FALSE) {
+    
+    # CenteredData <- center_data_fun(SimData$pre_data[sample(SimData$n),])
+    unmixed_obs <- SimData$pre_data %*% t(W_given)
+    
+    marginals <- list()
+    sample_sorting_indices <- list()
+    
+    for (i in 1:SimData$d) {
+        print("Marginal: ")
+        print(i)
+        sorted_unmixed_obs = sort(unmixed_obs[,i], index.return=TRUE)
+        out1 <- logConDens(sorted_unmixed_obs$x, smoothed = FALSE)
+        if (plotting){
+            plot(out1)
+        }
+        marginals[[i]] <- out1
+        sample_sorting_indices[[i]] <- sorted_unmixed_obs$ix
+    }
+    return(list("W_given"=W_given, "marginals"=marginals, "sample_sorting_indices"=sample_sorting_indices))
+}
+
+
+
 
 generate_estimator_with_logconcdead <- function(SimData, r=0.9, plotting=FALSE) {
     
@@ -507,6 +555,14 @@ visualize_independent_directions <- function(SimData, my_estimator, xlim=c(-1,1)
     arrows(rep(0,d), rep(0,d), W[,1], W[,2], col="blue")
     arrows(rep(0,d), rep(0,d), W_hat[,1], W_hat[,2], col="red")
     return(W_hat %*% t(W))
+}
+
+visualize_independent_directions_from_W <- function(W_true, W_estimate, xlim=c(-1,1), ylim=c(-1,1)){
+    
+    plot(NULL, xlim=xlim, ylim=ylim, xlab=expression(x[1]), ylab=expression(x[2]), cex.lab=1.5, cex.axis=1.5)
+    arrows(rep(0,d), rep(0,d), W_true[,1], W_true[,2], col="blue")
+    arrows(rep(0,d), rep(0,d), W_estimate[,1], W_estimate[,2], col="red")
+    return(W_estimate %*% t(W_true))
 }
 
 direction_inner_products <- function(SimData, my_estimator){
