@@ -7,11 +7,12 @@ library(mvtnorm)
 library(LogConcDEAD)
 library(logcondens) 
 library(mclust)
+library(ica)
 
 ### Basic utilities
 
 fix_signs_fun <- function(my_mat) {
-    # Make the signs of the fist column positive
+    # Make the signs of the first column positive
     signs_first_column = ifelse(my_mat[,1] < 0, -1, 1)
     return(my_mat*signs_first_column)
 }
@@ -120,9 +121,9 @@ package_real_data <- function(real_data_mat) {
     return(list("n"=n, "d"=d, "pre_data"=real_data_mat))
 }
 
-get_uniform_data <- function(d, n, scalings_vec, true_mean_vec) {
+get_uniform_data <- function(d, n, scalings_vec, true_mean_vec, W) {
 
-    W <- fix_signs_fun(randortho(d, type="orthonormal"))
+    # W <- fix_signs_fun(randortho(d, type="orthonormal"))
     
     init_data <- matrix(0, nrow=n, ncol=d)
 
@@ -150,31 +151,48 @@ get_uniform_data <- function(d, n, scalings_vec, true_mean_vec) {
 ## Takes as input the output of the data-generating functions
 
 randomize_center_and_split <- function(SimData, r) {
-  num_samples_1 <- floor(r * SimData$n)
-  num_samples_2 <- SimData$n - num_samples_1
-  randomized_centered_data <- center_data_fun(SimData$pre_data[sample(SimData$n),])
-  data_1 <- randomized_centered_data$centered_data[1:num_samples_1,]
-  data_2 <- randomized_centered_data$centered_data[(num_samples_1+1):SimData$n,]
-  return(list("data_cov_estimation"=data_1, "data_marginal_estimation"=data_2, "mean_vec"=randomized_centered_data$mean_vec,
+    if (r == -1) {
+        print("NOTE: r is -1. Will not split samples!")
+        num_samples_1 <- SimData$n
+        num_samples_2 <- SimData$n
+        randomized_centered_data <- center_data_fun(SimData$pre_data[sample(SimData$n),])
+        data_1 <- randomized_centered_data$centered_data
+        data_2 <- randomized_centered_data$centered_data
+    } else {
+        num_samples_1 <- floor(r * SimData$n)
+        num_samples_2 <- SimData$n - num_samples_1
+        randomized_centered_data <- center_data_fun(SimData$pre_data[sample(SimData$n),])
+        data_1 <- randomized_centered_data$centered_data[1:num_samples_1,]
+        data_2 <- randomized_centered_data$centered_data[(num_samples_1+1):SimData$n,]
+    }
+    
+    return(list("data_cov_estimation"=data_1, "data_marginal_estimation"=data_2, "mean_vec"=randomized_centered_data$mean_vec,
               "n_cov_estimation"=num_samples_1, "n_marginal_estimation"=num_samples_2))
 }
 
 ## Generates the density estimate using the algorithm above, 
 ## based on the two sets of data from randomize_center_and_split
 
-generate_estimator_with_logcondens <- function(SimData, r=0.9, plotting=FALSE) {
+generate_estimator_with_logcondens <- function(SimData, r=0.9, use_ICA=FALSE, plotting=FALSE) {
     
     SplitData <- randomize_center_and_split(SimData, r)
     
-    cov_compute <- cov.wt(x=SplitData$data_cov_estimation, center=FALSE, method="ML")
-    # weights_vec_renormalized <- weights_vec/(sum(weights_vec)*SplitData$n_cov_estimation)
-    # weighted_cov_compute <- cov.wt(x=SplitData$data_cov_estimation, wt=weights_vec, center=center, method="ML")
-    # weighted_emp_cov_mat <- cov_compute$cov
-    # weighted_emp_mean <- cov_compute$center
+    if (use_ICA) {
+        my_output <- icafast(SplitData$data_cov_estimation, nc=d, center=FALSE, fun='kur')
+        qrmat <- qr(t(my_output$W))
+        W_hat <- t(qr.Q(qrmat))
+        print("ICA done!")
+    } else {
+        cov_compute <- cov.wt(x=SplitData$data_cov_estimation, center=FALSE, method="ML")
+        # weights_vec_renormalized <- weights_vec/(sum(weights_vec)*SplitData$n_cov_estimation)
+        # weighted_cov_compute <- cov.wt(x=SplitData$data_cov_estimation, wt=weights_vec, center=center, method="ML")
+        # weighted_emp_cov_mat <- cov_compute$cov
+        # weighted_emp_mean <- cov_compute$center
+        W_hat <- t(princomp(covmat=cov_compute$cov, fix_sign=TRUE)$loadings)
+        print("PCA done!")
+    }
 
-    W_hat <- t(princomp(covmat=cov_compute$cov, fix_sign=TRUE)$loadings)
     unmixed_obs <- SplitData$data_marginal_estimation %*% t(W_hat)
-    print("PCA done!")
     
     marginals <- list()
     
@@ -215,19 +233,27 @@ fit_marginals_given_W <- function(SimData, W_given, plotting=FALSE) {
 
 
 
-generate_estimator_with_logconcdead <- function(SimData, r=0.9, plotting=FALSE) {
+generate_estimator_with_logconcdead <- function(SimData, r=0.9, use_ICA=FALSE, plotting=FALSE) {
     
     SplitData <- randomize_center_and_split(SimData, r)
     
-    cov_compute <- cov.wt(x=SplitData$data_cov_estimation, center=FALSE, method="ML")
-    # weights_vec_renormalized <- weights_vec/(sum(weights_vec)*SplitData$n_cov_estimation)
-    # weighted_cov_compute <- cov.wt(x=SplitData$data_cov_estimation, wt=weights_vec, center=center, method="ML")
-    # weighted_emp_cov_mat <- cov_compute$cov
-    # weighted_emp_mean <- cov_compute$center
+    if (use_ICA) {
+        my_output <- icafast(SplitData$data_cov_estimation, nc=d, center=FALSE, fun='kur')
+        qrmat <- qr(t(my_output$W))
+        W_hat <- t(qr.Q(qrmat))
+        print("ICA done!")
+    } else {
+        cov_compute <- cov.wt(x=SplitData$data_cov_estimation, center=FALSE, method="ML")
+        # weights_vec_renormalized <- weights_vec/(sum(weights_vec)*SplitData$n_cov_estimation)
+        # weighted_cov_compute <- cov.wt(x=SplitData$data_cov_estimation, wt=weights_vec, center=center, method="ML")
+        # weighted_emp_cov_mat <- cov_compute$cov
+        # weighted_emp_mean <- cov_compute$center
+        W_hat <- t(princomp(covmat=cov_compute$cov, fix_sign=TRUE)$loadings)
+        print("PCA done!")
+    }
 
-    W_hat <- t(princomp(covmat=cov_compute$cov, fix_sign=TRUE)$loadings)
     unmixed_obs <- SplitData$data_marginal_estimation %*% t(W_hat)
-    print("PCA done!")
+    
     
     marginals <- list()
     
@@ -498,11 +524,28 @@ heteroskedastic_gaussian_pdf_vectorized <- function(X_mat, SimData){
 
 axis_aligned_heteroskedastic_gamma_pdf_vectorized <- function(X_mat, SimData) {
     n_eval <- NROW(X_mat)
+    d <- NCOL(X_mat)
     density_data <- rep(1,n_eval)
     for (dind in 1:d){
         density_data <- density_data * dgamma(X_mat[,dind], shape=SimData$covariance_Z[dind,dind]) 
     }
     return(density_data)
+}
+
+uniform_pdf_vectorized <- function(X_mat, scalings_vec, true_mean_vec, W) {
+
+    n_eval <- NROW(X_mat)
+    d <- NCOL(X_mat)
+
+    X_mat_centered = t(t(X_mat) - true_mean_vec) # subtract the mean computed using the training data!
+
+    Z_mat = X_mat_centered %*% t(W)
+    
+    result = rep(1.0, n_eval)
+    for (dind in 1:d){
+        result <- result * dunif(Z_mat[,dind], min=-scalings_vec[dind], max=scalings_vec[dind])
+    }
+    return(result)
 }
 
 ### Functions for evaluating Monte Carlo integrals for Hellinger error computations
@@ -651,6 +694,179 @@ tests_for_split_ratio_r_gaussian <- function(d, n, all_split_r_vals, Sigma_max, 
 }
 
 
+# Yuan and Samworth
+
+#  See the function "fit_marginals_given_W" near line 200
+
+
+compute_directional_derivative <- function(Y_tst, SimData, W_current, estimator_current) {
+
+    # Looks correct
+
+    n <- SimData$n
+    d <- SimData$d
+
+    K_inds = matrix(0, nrow=n, ncol=d) # K_ij
+    slopes_b = matrix(0, nrow=n, ncol=d)
+
+    WY <- W_current %*% Y_tst
+    grad_g_val <- 0
+
+    for (dind in 1:d) {
+        density <- estimator_current$marginals[[dind]]
+        sample_sorting_indices <- estimator_current$sample_sorting_indices[[dind]]
+        sorted_samples <- SimData$pre_data[sample_sorting_indices, ]
+        mask <- (density$IsKnot == 1)
+        cumsum_knots <- cumsum(density$IsKnot)
+        slopes_knotwise <- diff(density$phi[mask])/diff(density$x[mask])
+        
+        num_knots <- sum(mask)
+        knot_indices <- which(mask)
+        c_vec <- WY[dind,]
+        transformed_samples <- sorted_samples %*% c_vec
+        selection_indicators <- transformed_samples[mask] 
+
+        K_inds[,dind] = cumsum_knots # handles most points correctly
+        K_inds[knot_indices, dind] <- ifelse(selection_indicators<0, c(1:num_knots)-1, c(1:num_knots)) # corrects the knot points
+
+        K_inds[1, dind] <- 1
+        K_inds[n, dind] <- num_knots - 1 # corrects the first and the last knot points
+
+        slopes_b[,dind] <- slopes_knotwise[K_inds[,dind]]
+
+        grad_g_val <- grad_g_val + sum(transformed_samples*slopes_b[,dind])/n
+    }
+    return(grad_g_val)
+}
+
+compute_normalized_log_likelihood_g <- function(SimData, W_candidate, estimator_current) {
+
+    # Looks correct, but check in a notebook! Test against alternative comparisons?
+    # Compare with the likelihood value computed by the logConDens function?
+
+    g_val <- 0
+
+    Z_mat_candidate <- SimData$pre_data %*% t(W_candidate)
+
+    for (dind in 1:SimData$d) {
+        
+        g_val <- g_val + (1/SimData$n)*sum(evaluateLogConDens(Z_mat_candidate[,dind], estimator_current$marginals[[dind]], which=1)[,2])
+    }
+    return(g_val)
+}
+
+update_W_given_marginals <- function(SimData, W_current, estimator_current, alp=0.3, gmm=0.5) {
+
+    # Find steepest descent along the basis of the tangent space
+    Y_tst <- matrix(0, nrow=SimData$d, ncol=SimData$d)
+    grad_g_vals <- matrix(0, nrow=SimData$d, ncol=SimData$d)
+
+    for (s in 1:(SimData$d - 1)){
+        for (r in (s+1):SimData$d) {
+            Y_tst[r,s] <- 1/sqrt(2)
+            Y_tst[s,r] <- -1/sqrt(2)
+            grad_g_vals[r,s] <- compute_directional_derivative(Y_tst, SimData, W_current, estimator_current)
+            grad_g_vals[s,r] <- compute_directional_derivative(-Y_tst, SimData, W_current, estimator_current)
+            Y_tst[r,s] <- 0
+            Y_tst[s,r] <- 0
+        }
+    }
+    grad_g_max <- max(grad_g_vals)
+    max_inds <- which(grad_g_vals == grad_g_max, arr.ind = TRUE)
+    r_max <- max_inds[1,1]
+    s_max <- max_inds[1,2]
+
+    # Construct Y_max
+    Y_max <- matrix(0, nrow=SimData$d, ncol=SimData$d)
+    Y_max[r_max,s_max] <- 1/sqrt(2)
+    Y_max[s_max, r_max] <- -1/sqrt(2)
+
+    # Line search
+    ep <- 1.0
+    W_candidate_update <- W_current %*% expm(ep*Y_max)
+    g_val_current <- compute_normalized_log_likelihood_g(SimData, W_current, estimator_current)
+    g_val_update <- compute_normalized_log_likelihood_g(SimData, W_candidate_update, estimator_current)
+    counter <- 0
+    while (g_val_update <= g_val_current + alp*ep*grad_g_max) {
+        ep <- gmm*ep
+        W_candidate_update <- W_current %*% expm(ep*Y_max)
+        g_val_update <- compute_normalized_log_likelihood_g(SimData, W_candidate_update, estimator_current)
+        counter <- counter + 1
+        if (counter > 20) break
+    }  
+    return(W_candidate_update)
+}
+
+
+yuan_samworth_alternating <- function(SimData, W_init, alp=0.3, gmm=0.5, max_iter=20, converged_threshold=1e-7) {
+
+    W_current <- W_init
+    # visualize_independent_directions_from_W(SimData$W, W_current)
+    estimator_current <- fit_marginals_given_W(SimData, W_current, plotting=FALSE)
+
+    llh_all <- c()
+    llh_all[1] <- compute_normalized_log_likelihood_g(SimData, W_current, estimator_current)
+    cat("Initial likelihood =  ", llh_all[1])
+
+    CONVERGED_FLAG <- FALSE
+
+    for (itind in 1:max_iter) {
+
+
+        W_current <- update_W_given_marginals(SimData, W_current, estimator_current, alp=alp, gmm=gmm)
+
+        estimator_current <- fit_marginals_given_W(SimData, W_current, plotting=FALSE)
+
+        llh_all[itind+1] <- compute_normalized_log_likelihood_g(SimData, W_current, estimator_current)
+        cat("Current likelihood =  ", llh_all[itind+1])
+
+        if ((llh_all[itind+1]-llh_all[itind])/abs(llh_all[itind]) < converged_threshold) {
+            CONVERGED_FLAG <- TRUE
+            cat("Converged by iteration ", itind)
+            break
+        }
+
+        # cat("Iter: ")
+        # print(itind)
+        # print(llh_all[itind])
+        # visualize_independent_directions_from_W(SimData$W, W_current)
+    }
+
+    return(list("estimator"=estimator_current, "llh_all"=llh_all, "converged_flag"=CONVERGED_FLAG))
+}
+
+yuan_samworth_alternating_with_repeats <- function(SimData, num_repeats=10, alp=0.3, gmm=0.5, max_iter=20, converged_threshold=1e-7) {
+
+    all_algo_outputs <- list()
+    all_final_log_likelihoods <- rep(0, num_repeats)
+
+    for (repind in 1:num_repeats) {
+        W_init <- fix_signs_fun(randortho(d, type="orthonormal"))
+        all_algo_outputs[[repind]] <- yuan_samworth_alternating(SimData, W_init, alp=0.3, gmm=0.5, max_iter=20, converged_threshold=1e-7)
+        all_final_log_likelihoods[repind] <- tail(all_algo_outputs[[repind]]$llh_all, n=1)
+    }
+    best_llh <- max(all_final_log_likelihoods)
+    best_repeat <- which(all_final_log_likelihoods == best_llh)
+
+    return(all_algo_outputs[[best_repeat]])
+}
+
+
+evaluate_yuan_samworth_estimator_vectorized <- function(X_mat, my_estimator){
+    # X_mat must be organized such that each row is a point in R^d
+    d <- NCOL(X_mat)
+    n_eval <- NROW(X_mat)
+    
+    # X_mat_centered = t(t(X_mat) - my_estimator$mean_vec) # subtract the mean computed using the training data!
+
+    Z_mat_hat = X_mat %*% t(my_estimator$W_given)
+    
+    result = rep(1.0, n_eval)
+    for (dind in 1:d){
+        result = result * evaluateLogConDens(Z_mat_hat[,dind], my_estimator$marginals[[dind]], which=2)[,3]
+    }
+    return(result)
+}
 
 
 
